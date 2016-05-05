@@ -1,4 +1,4 @@
-local curl = require "luacurl" -- luarocks/luacurl
+local http = require "fan.http"
 local setmetatable = setmetatable
 local tcpd = require "fan.tcpd"
 local coroutine = coroutine
@@ -206,8 +206,8 @@ local ngx_req_mt = {
 }
 
 local ngx_obj = {
-    escape_uri = curl.escape,
-    unescape_uri = curl.unescape,
+    escape_uri = http.escape,
+    unescape_uri = http.unescape,
     encode_base64 = base64.encode,
     sha1_bin = sha1_bin,
     say = ngx_say,
