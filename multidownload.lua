@@ -12,6 +12,9 @@ local function main()
     local task = download.add("http://ftp.sjtu.edu.cn/ubuntu-cd/14.04.4/ubuntu-14.04.4-desktop-amd64.iso", "ubuntu-14.04.4-desktop-amd64.iso")
     task:start()
 
+    local task = download.add("http://mirrors.opencas.cn/ubuntu-releases/16.04/ubuntu-16.04-server-amd64.iso", "ubuntu-16.04-server-amd64.iso")
+    task:start()
+
     while true do
         print(string.rep("-", 20))
         local tasks = download.list()

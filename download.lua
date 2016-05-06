@@ -52,7 +52,9 @@ local function start_task(task, beginoffset, endoffset, offset)
                             subtask.endoffset = tonumber(v)
                         end
                     elseif k:lower() == "content-range" then
-                        task.length = tonumber(string.match(v, "bytes %d+[-]%d+/(%d+)"))
+                        local offset,total = string.match(v, "bytes (%d+)[-]%d+/(%d+)")
+                        subtask.offset = tonumber(offset)
+                        task.length = tonumber(total)
                     end
                 end
             elseif header.responseCode == 302 then
