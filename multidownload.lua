@@ -1,4 +1,3 @@
-package.cpath = "/usr/local/lib/?.so;" .. package.cpath
 
 local fan = require "fan"
 local http = require "fan.http"
