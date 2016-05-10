@@ -1,11 +1,11 @@
 local json = require "cjson"
+local fan = require "fan"
 local http = require "fan.http"
 local io = io
 local pairs = pairs
 local string = string
 local setmetatable = setmetatable
 local table = table
-local socket = require "socket.core"
 
 local total_piece_count = 10
 local minum_piece_length = 512 * 1024
@@ -14,6 +14,19 @@ local task_mt = {}
 task_mt.__index = task_mt
 
 local tasks = {}
+
+local function gettime()
+    local sec,usec = fan.gettime()
+    return sec + usec / 1000000.0
+end
+
+local function random_url(task)
+    if task.peerurls then
+        return task.peerurls[math.random(#(task.peerurls))]
+    else
+        return task.url
+    end
+end
 
 local function start_task(task, beginoffset, endoffset, offset)
     if not offset then
@@ -24,8 +37,10 @@ local function start_task(task, beginoffset, endoffset, offset)
     task.nameindex = task.nameindex + 1
     task.subtasks[subtask.name] = subtask
 
+    local url = random_url(task)
+    print("using", url)
     local req = {
-        url = task.url,
+        url = url,
         headers = {
             ["Range"] = endoffset and string.format("bytes=%d-%d", offset, endoffset) or string.format("bytes=%d-", offset)
         },
@@ -59,7 +74,9 @@ local function start_task(task, beginoffset, endoffset, offset)
                 end
             elseif header.responseCode == 302 then
                 task.url = header.Location
-            elseif header.responseCode ~= 200 then
+            elseif header.responseCode == 200 then
+                task.offset = 0
+            else
                 print(header.responseCode)
                 task.stop = true
             end
@@ -151,9 +168,11 @@ function task_mt:lifecycle()
         return
     end
 
-    if socket.gettime() - self.last_mark_time >= 2 then
-        self.speed = (self.current_downloaded - self.last_mark_value) / (socket.gettime() - self.last_mark_time)
-        self.last_mark_time = socket.gettime()
+    local sec = gettime()
+
+    if sec - self.last_mark_time >= 2 then
+        self.speed = (self.current_downloaded - self.last_mark_value) / (sec - self.last_mark_time)
+        self.last_mark_time = sec
         self.last_mark_value = self.current_downloaded
     end
 
@@ -214,14 +233,14 @@ function task_mt:lifecycle()
     end
 end
 
-local function add(url, path)
+local function add(url, path, peerurls)
     for i,v in ipairs(tasks) do
         if v.url == url then
             return v
         end
     end
 
-    local task = {url = url, path = path, subtasks = {}, current_downloaded = 0, speed = 0, last_mark_time = socket.gettime(), last_mark_value = 0, stop = true, completed = false, nameindex = 1}
+    local task = {url = url, peerurls = peerurls, path = path, subtasks = {}, current_downloaded = 0, speed = 0, last_mark_time = gettime(), last_mark_value = 0, stop = true, completed = false, nameindex = 1}
     local f = io.open(path, "rb+")
     if not f then
         f = io.open(path, "wb")
