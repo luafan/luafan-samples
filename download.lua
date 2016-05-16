@@ -51,7 +51,6 @@ local function start_task(task, beginoffset, endoffset, offset)
 
             task.f:seek("set", subtask.offset)
             task.f:write(data)
-            task.f:flush()
             subtask.offset = subtask.offset + #(data)
             task.current_downloaded = task.current_downloaded + #(data)
 
@@ -124,6 +123,9 @@ function task_mt:start()
 end
 
 function task_mt:save()
+    if self.f then
+        self.f:flush()
+    end
     local info = assert(io.open(string.format("%s.json", self.path), "wb"))
     info:write(json.encode{subtasks = self.subtasks, length = self.length, url = self.url})
     info:close()
