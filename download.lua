@@ -38,12 +38,13 @@ local function start_task(task, beginoffset, endoffset, offset)
     task.subtasks[subtask.name] = subtask
 
     local url = random_url(task)
-    print("using", url)
+    -- print("using", url)
     local req = {
         url = url,
         headers = {
             ["Range"] = endoffset and string.format("bytes=%d-%d", offset, endoffset) or string.format("bytes=%d-", offset)
         },
+        timeout = 30,
         onreceive = function(data)
             if task.stop then
                 return 0
@@ -91,16 +92,16 @@ end
 
 function task_mt:start()
     if self.stop then
-        self.stop = false
-        self.subtasks = {}
-
         local started = false
-
         local info = io.open(string.format("%s.json", self.path), "rb")
         if info then
             local data = info:read("*all")
             local task = json.decode(data)
             info:close()
+
+            if task.completed then
+                return
+            end
 
             if task.length then
                 self.length = task.length
@@ -108,7 +109,9 @@ function task_mt:start()
 
             self.url = task.url
 
-            for _,v in pairs(task.subtasks) do
+            self.stop = false
+            self.subtasks = {}
+           for _,v in pairs(task.subtasks) do
                 start_task(self, v.beginoffset, v.endoffset, v.offset)
                 started = true
             end
@@ -160,7 +163,7 @@ function task_mt:info()
         speed = self.speed,
         length = self.length,
         unfinished = unfinished,
-        estimate = self.length and format_time(unfinished / self.speed) or "N/A"
+        estimate = (self.length and self.speed > 0) and format_time(unfinished / self.speed) or "N/A"
     }
 
 end
@@ -231,6 +234,7 @@ function task_mt:lifecycle()
 
     if self.length and taskcount == 0 then
         self.f:close()
+        self.f = nil
         self.completed = true
     end
 end
