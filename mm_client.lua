@@ -1,3 +1,6 @@
+local rootPath = "sync"
+local MAX_DOWNLOAD_COUNT = 2
+local MAX_PEER_COUNT = 10
 
 require "compat53"
 
@@ -17,7 +20,40 @@ local string = string
 local setmetatable = setmetatable
 local table = table
 
-local db = sqlite3.open("mm.db")
+local mkdir_cache = {}
+
+local function split(s, sep)
+  sep = lpeg.P(sep)
+  local elem = lpeg.C((1 - sep)^0)
+  local p = lpeg.Ct(elem * (sep * elem)^0)   -- make a table capture
+  return lpeg.match(p, s)
+end
+
+local function mkdir(path)
+    if mkdir_cache[path] then
+        return
+    else
+        mkdir_cache[path] = true
+        lfs.mkdir(path)
+    end
+end
+
+local function mkdirs(path)
+    local parts = split(path, "/")
+    local t = {}
+
+    for i,v in ipairs(parts) do
+        table.insert(t, v)
+        mkdir(table.concat(t, "/"))
+    end
+end
+
+mkdirs(rootPath)
+
+local db = sqlite3.open(string.format("%s/.mm.db", rootPath))
+
+local download_queue_co
+local exist_on_complete
 
 local setting_model = {
     ["key"] = "text",
@@ -58,15 +94,6 @@ local context = orm.new(db, {
 
 local BUF_SIZE = 1024 * 1024
 
-local mkdir_cache = {}
-
-local function split(s, sep)
-  sep = lpeg.P(sep)
-  local elem = lpeg.C((1 - sep)^0)
-  local p = lpeg.Ct(elem * (sep * elem)^0)   -- make a table capture
-  return lpeg.match(p, s)
-end
-
 local function escape_path(path)
     local parts = split(path, "/")
     local t = {}
@@ -76,29 +103,11 @@ local function escape_path(path)
     return table.concat(t, "/")
 end
 
-local function mkdir(path)
-    if mkdir_cache[path] then
-        return
-    else
-        mkdir_cache[path] = true
-        lfs.mkdir(path)
-    end
-end
-
-local function mkdirs(path)
-    local parts = split(path, "/")
-    local t = {}
-
-    for i,v in ipairs(parts) do
-        table.insert(t, v)
-        mkdir(table.concat(t, "/"))
-    end
-end
-
 local function getfilepath(urlpath)
-    local path,name = string.match(urlpath, "/(.*)/([^/]+)")
-    mkdirs(path)
-    return string.format("%s/%s", path, name)
+    local path,name = string.match(urlpath, "/file(.*)/([^/]+)")
+    local localpath = string.format("%s%s", rootPath, path)
+    mkdirs(localpath)
+    return string.format("%s/%s", localpath, name)
 end
 
 local function is_invalidate_links(links)
@@ -117,7 +126,8 @@ local function listfiles(path, session)
             return map.list
         end
     end
-    print(url, ret.body)
+    
+    error(ret.body)
 end
 
 local function listfilelinks(path, session)
@@ -136,7 +146,6 @@ local function listfilelinks(path, session)
 end
 
 -----download start ---
-local total_piece_count = 10
 local minum_piece_length = 512 * 1024
 
 local task_mt = {}
@@ -386,7 +395,7 @@ function task_mt:lifecycle()
         start_task(self, v)
     end
 
-    while taskcount < total_piece_count do
+    while taskcount < MAX_PEER_COUNT do
         local maxtask = nil
         local maxleft = 0
 
@@ -430,6 +439,13 @@ function task_mt:lifecycle()
 
         self.task.completed = true
         self.task:update()
+
+        for i,v in ipairs(tasks) do
+            if v == self then
+                table.remove(tasks, i)
+                break
+            end
+        end
     end
 end
 
@@ -452,7 +468,7 @@ local function add(taskid, peerurls)
     return task
 end
 
-local function list()
+local function list(running)
     return tasks
 end
 
@@ -525,19 +541,26 @@ local function infolist()
 
         for _,task in ipairs(tasks) do
             task:lifecycle()
-            local info = task:info()
-            print(string.format("%1.02f%% complete (%02d peers) (speed %1.02fKB/s) time left: %s %s", info.progress, info.peercount, info.speed / 1024, info.estimate, task.path))
-            task:save()
             if not task.completed then
+                local info = task:info()
+                print(string.format("%1.02f%% complete (%02d peers) (speed %1.02fKB/s) time left: %s %s", info.progress, info.peercount, info.speed / 1024, info.estimate, task.path))
+                task:save()
                 count = count + 1
                 speed = speed + info.speed
             end
         end
 
+        if count < MAX_DOWNLOAD_COUNT then
+            if download_queue_co then
+                coroutine.resume(download_queue_co)
+            end
+        end
+
         print(string.format("speed total: %1.02fKB", speed))
 
-        if count == 0 then
-            print("all download completed.")
+        if count == 0 and exist_on_complete then
+            print("all sync completed.")
+            os.exit(0)
         end
 
         fan.sleep(2)
@@ -561,6 +584,7 @@ local function main()
                 value = map.session
             })
             print("bindcode", map.code)
+            print(string.format("visit: %s/bind?code=%s", remote_url, map.code))
         else
             for k,v in pairs(ret) do
                 print(k,v)
@@ -613,10 +637,21 @@ local function main()
             return
         end
 
+        if #(download.list()) >= MAX_DOWNLOAD_COUNT then
+            download_queue_co = coroutine.running()
+            coroutine.yield()
+            download_queue_co = nil
+        end
+
         local task = download.add(r.id, links)
         assert(task:start())
         total = total + r.size
-    end, "where exist=1 and verified=0 and status>=0 and isdir=0") -- 
+    end, "where exist=1 and verified=0 and status>=0 and isdir=0")
+
+    exist_on_complete = true
 end
 
-fan.loop(main)
+main_co = coroutine.create(main)
+print("main_co", coroutine.resume(main_co))
+
+fan.loop()
