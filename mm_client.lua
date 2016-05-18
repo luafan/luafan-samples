@@ -1,6 +1,8 @@
-local rootPath = "sync"
-local MAX_DOWNLOAD_COUNT = 2
+local rootPath = "sync2"
+local remotePath = "/file"
+local MAX_DOWNLOAD_COUNT = 10
 local MAX_PEER_COUNT = 10
+local PEER_CACHE_SIZE_WATERMARK = 1024 * 512
 
 require "compat53"
 
@@ -71,6 +73,7 @@ local task_model = {
     ["isdir"] = "integer",
     ["completed"] = "integer default 0",
     ["verified"] = "integer default 0",
+    ["lastfailedmd5"] = "text",
     ["exist"] = "integer default 1",
     ["status"] = "integer default 0",
 }
@@ -127,7 +130,7 @@ local function listfiles(path, session)
         end
     end
     
-    error(ret.body)
+    print(url, ret.body)
 end
 
 local function listfilelinks(path, session)
@@ -140,6 +143,23 @@ local function listfilelinks(path, session)
         local map = cjson.decode(ret.body)
         if map.success then
             return map.list
+        end
+    end
+    print(url, ret.body)
+end
+
+local function listdiff(cursor)
+    local url = string.format("%s/diff?session=%s&cursor=%s", remote_url, session_value, cursor or "null")
+    local ret = http.get{
+        url = url
+    }
+
+    if ret.responseCode == 200 and not ret.error then
+        local map = cjson.decode(ret.body)
+        if map.success then
+            print(string.format("%d\thas_more=%s\treset=%s", #(map.list), map.has_more, map.reset))
+            print(map.list[1] and cjson.encode(map.list[1]))
+            return map.list,map.has_more,map.reset,map.cursor
         end
     end
     print(url, ret.body)
@@ -171,6 +191,19 @@ local function start_task(task, block)
     end
 
     block.complete = false
+    local peercache = {}
+    local peercache_size = 0
+
+    local peer_flush = function()
+        if task.f and peercache_size > 0 then
+            task.f:seek("set", block.offset)
+            task.f:write(table.concat(peercache))
+            block.offset = block.offset + peercache_size
+
+            peercache_size = 0
+            peercache = {}
+        end
+    end
 
     local url = task.peerurls[math.random(#(task.peerurls))]
 
@@ -188,10 +221,16 @@ local function start_task(task, block)
             end
 
             if not block.complete then
-                task.f:seek("set", block.offset)
-                task.f:write(data)
-                block.offset = block.offset + #(data)
-                task.current_downloaded = task.current_downloaded + #(data)
+                local data_size = #(data)
+                table.insert(peercache, data)
+                peercache_size = peercache_size + data_size
+                task.current_downloaded = task.current_downloaded + data_size
+
+                if peercache_size < PEER_CACHE_SIZE_WATERMARK then
+                    return data_size
+                else
+                    peer_flush()
+                end
             end
 
             if block.complete or (block.endoffset and block.offset > block.endoffset) then
@@ -212,6 +251,7 @@ local function start_task(task, block)
                         task.length = tonumber(total)
                     end
                 end
+                task.partable = true
             elseif header.responseCode == 302 then
                 local location
                 for k,v in pairs(header) do
@@ -243,9 +283,11 @@ local function start_task(task, block)
                 -- print("302", location)
                 block.complete = true
             elseif header.responseCode == 200 then
+                task.partable = false
                 task.offset = 0
             else
                 -- print("unexpect responsecode:", header.responseCode)
+                task.partable = false
                 block.complete = true
             end
         end,
@@ -253,6 +295,7 @@ local function start_task(task, block)
             -- if ret.error then
             --     print("oncomplete error:", ret.error)
             -- end
+            peer_flush()
             block.complete = true
             block.ret = ret
         end
@@ -270,19 +313,23 @@ function task_mt:start()
         end
 
         self.length = task.size
-
-        if not self.peerurls then
-            local links = listfilelinks(r.path, session.value)
-            if not is_invalidate_links(links) then
-                self.peerurls = links
-            else
-                return false, "invalid resource."
-            end
-        end
-
         self.blocks = {}
         self.stop = false
         self.task = task
+
+        if not self.peerurls then
+            while true do
+                local links = listfilelinks(r.path, session.value)
+                if not links then
+                    fan.sleep(10)
+                elseif not is_invalidate_links(links) then
+                    self.peerurls = links
+                    break
+                else
+                    return false, "invalid resource."
+                end
+            end
+        end
 
         self.path = getfilepath(task.path)
 
@@ -354,7 +401,7 @@ function task_mt:info()
 end
 
 function task_mt:lifecycle()
-    if self.completed or self.stop then
+    if self.task.completed == 1 or self.stop then
         return
     end
 
@@ -395,7 +442,7 @@ function task_mt:lifecycle()
         start_task(self, v)
     end
 
-    while taskcount < MAX_PEER_COUNT do
+    while self.partable and taskcount < MAX_PEER_COUNT do
         local maxtask = nil
         local maxleft = 0
 
@@ -431,21 +478,13 @@ function task_mt:lifecycle()
         end
     end
 
-    if self.length and taskcount == 0 then
+    if self.length and taskcount == 0 and self.task.completed == 0 then
         self.f:close()
         self.f = nil
-        self.completed = true
         self.stop = true
 
-        self.task.completed = true
+        self.task.completed = 1
         self.task:update()
-
-        for i,v in ipairs(tasks) do
-            if v == self then
-                table.remove(tasks, i)
-                break
-            end
-        end
     end
 end
 
@@ -480,11 +519,59 @@ local download =  {
 }
 -----download end -----
 
+local function syncdiff(cursor)
+    local list,has_more,reset,cursor = listdiff(cursor)
+    if list then
+        if reset then
+            context:update("update task set exist=0")
+        end
+
+        for i,v in ipairs(list) do
+            local task = context.task("one", "where path=?", v.path)
+            if v.isdelete ~= 0 then
+                if task then
+                    task.exist = 0
+                    task:update()
+
+                    if task.isdir == 1 then
+                        context:update("update task set exist=0 where parentpath=?", task.path)
+                    end
+                end
+            else
+                if task then
+                    if task.md5 ~= v.md5 then
+                        task.verified = 0
+                        task.completed = 0
+                    end
+
+                    task.ctime = v.ctime
+                    task.mtime = v.mtime
+                    task.md5 = v.md5
+                    task.size = v.size
+                    task.exist = 1
+                    task:update()
+                else
+                    local parentpath,name = string.match(v.path, "(.*)/([^/]+)")
+                    task = context.task("new", {
+                        path = v.path,
+                        parentpath = parentpath,
+                        name = name,
+                        size = v.size,
+                        md5 = v.md5,
+                        ctime = v.ctime,
+                        mtime = v.mtime,
+                        isdir = v.isdir
+                    })                
+                end
+            end
+        end
+    end
+
+    return has_more, cursor
+end
+
 local function addtask(path, session)
     local list = listfiles(path, session)
-    -- for i,v in ipairs(list) do
-    --     print(path, v.path)
-    -- end
     local locallist = context.task("list", "where parentpath=?", path)
     local exist_map = {}
     if list then
@@ -503,14 +590,15 @@ local function addtask(path, session)
                     mtime = v.mtime,
                     isdir = v.isdir
                 })
+                print("new task:", task.id)
             else
                 if v.mtime ~= task.mtime then
                     task.mtime = v.mtime
                     task.ctime = v.ctime
                     task.isdir = v.isdir
                     task:update()
-                -- else
-                --     needdeepin = false
+                else
+                    needdeepin = false
                 end
             end
 
@@ -534,20 +622,41 @@ local function infolist()
     while true do
         print(string.rep("-", 20))
         local tasks = download.list()
+        print("total tasks:", #(tasks))
+        for k,v in pairs(tasks) do
+            print("before",k,v)
+        end
 
         local count = 0
 
         local speed = 0
 
-        for _,task in ipairs(tasks) do
-            task:lifecycle()
-            if not task.completed then
-                local info = task:info()
-                print(string.format("%1.02f%% complete (%02d peers) (speed %1.02fKB/s) time left: %s %s", info.progress, info.peercount, info.speed / 1024, info.estimate, task.path))
-                task:save()
+        local completedlist = {}
+
+        for _,v in ipairs(tasks) do
+            v:lifecycle()
+            v:save()
+            if v.task.completed == 0 then
+                local info = v:info()
+                print(string.format("%1.02f%% complete (%02d peers) (speed %1.02fKB/s) time left: %s %s", info.progress, info.peercount, info.speed / 1024, info.estimate, v.path))
                 count = count + 1
                 speed = speed + info.speed
+            else
+                table.insert(completedlist, v)
             end
+        end
+
+        for i,v in ipairs(completedlist) do
+            for j,t in ipairs(tasks) do
+                if v == t then
+                    table.remove(tasks, j)
+                    break
+                end
+            end
+        end
+
+        for k,v in pairs(tasks) do
+            print("after",k,v)
         end
 
         if count < MAX_DOWNLOAD_COUNT then
@@ -556,7 +665,7 @@ local function infolist()
             end
         end
 
-        print(string.format("speed total: %1.02fKB", speed))
+        print(string.format("speed total: %1.02fKB", speed/1024))
 
         if count == 0 and exist_on_complete then
             print("all sync completed.")
@@ -566,9 +675,6 @@ local function infolist()
         fan.sleep(2)
     end
 end
-
-info_co = coroutine.create(infolist)
-print("info_co", coroutine.resume(info_co))
 
 local function main()
     local session = context.setting("one", "where key=?", "session")
@@ -596,7 +702,25 @@ local function main()
 
     session_value = session.value
 
-    addtask("/file", session_value)
+    -- addtask(remotePath, session_value)
+    local cursor_setting = context.setting("one", "where key=?", "cursor")
+    if not cursor_setting then
+        cursor_setting = context.setting("new", {
+            key = "cursor",
+            value = "null",
+        })
+    end
+
+    local cursor = cursor_setting.value
+    local has_more = true
+    while has_more do
+        has_more, cursor = syncdiff(cursor)
+        cursor_setting.value = cursor
+        cursor_setting:update()
+    end
+
+    info_co = coroutine.create(infolist)
+    print("info_co", coroutine.resume(info_co))
 
     local total = 0
     context.task(function(r)
@@ -611,17 +735,27 @@ local function main()
                             break
                         else
                             d:update(buf)
+                            fan.sleep(0.001)
                         end
                     end
                     f:close()
 
-                    if d:digest() == r.md5 then
+                    local current_md5 = d:digest()
+
+                    if current_md5 == r.md5 or current_md5 == r.lastfailedmd5 then
                         r.verified = 1
                         r:update()
                     else
+                        print(r.path, "md5 verify failed, marked as not complete.")
+                        os.remove(getfilepath(r.path))
                         r.completed = 0
+                        r.lastfailedmd5 = current_md5
                         r:update()
                     end
+                else
+                    print(r.path, "missing, marked as not complete.")
+                    r.completed = 0
+                    r:update()
                 end
             end
         end
@@ -630,11 +764,15 @@ local function main()
             return
         end
 
-        local links = listfilelinks(r.path, session.value)
-        if is_invalidate_links(links) then
-            r.status = STATUS_INVALID
-            r:update()
-            return
+        while true do
+            local links = listfilelinks(r.path, session.value)
+            if not links then
+                fan.sleep(10)
+            elseif is_invalidate_links(links) then
+                r.status = STATUS_INVALID
+                r:update()
+                return
+            end
         end
 
         if #(download.list()) >= MAX_DOWNLOAD_COUNT then
