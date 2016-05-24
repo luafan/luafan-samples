@@ -479,8 +479,10 @@ function task_mt:lifecycle()
     end
 
     if self.length and taskcount == 0 and self.task.completed == 0 then
-        self.f:close()
-        self.f = nil
+        if self.f then
+            self.f:close()
+            self.f = nil
+        end
         self.stop = true
 
         self.task.completed = 1
