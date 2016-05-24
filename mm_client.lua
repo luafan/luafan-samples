@@ -1,4 +1,4 @@
-local rootPath = "sync2"
+local rootPath = "sync"
 local remotePath = "/file"
 local MAX_DOWNLOAD_COUNT = 10
 local MAX_PEER_COUNT = 10
@@ -319,7 +319,7 @@ function task_mt:start()
 
         if not self.peerurls then
             while true do
-                local links = listfilelinks(r.path, session.value)
+                local links = listfilelinks(task.path, session_value)
                 if not links then
                     fan.sleep(10)
                 elseif not is_invalidate_links(links) then
@@ -623,9 +623,9 @@ local function infolist()
         print(string.rep("-", 20))
         local tasks = download.list()
         print("total tasks:", #(tasks))
-        for k,v in pairs(tasks) do
-            print("before",k,v)
-        end
+        -- for k,v in pairs(tasks) do
+        --     print("before",k,v)
+        -- end
 
         local count = 0
 
@@ -655,9 +655,9 @@ local function infolist()
             end
         end
 
-        for k,v in pairs(tasks) do
-            print("after",k,v)
-        end
+        -- for k,v in pairs(tasks) do
+        --     print("after",k,v)
+        -- end
 
         if count < MAX_DOWNLOAD_COUNT then
             if download_queue_co then
@@ -772,6 +772,8 @@ local function main()
                 r.status = STATUS_INVALID
                 r:update()
                 return
+            else
+                break
             end
         end
 
