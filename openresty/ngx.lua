@@ -1,11 +1,18 @@
+local fan = require "fan"
 local http = require "fan.http"
-local setmetatable = setmetatable
 local tcpd = require "fan.tcpd"
+local udpd = require "fan.udpd"
+
+local setmetatable = setmetatable
 local coroutine = coroutine
 local tonumber = tonumber
+local type = type
+local table = table
+
 local sha1 = require 'sha1' -- luarocks/lmd5 (this will break luarocks, so remove it before other module installed complete.)
 local base64 = require "base64" -- luarocks/base64
 
+------------ tcp bgn ------------
 local tcp_mt = {}
 tcp_mt.__index = tcp_mt
 
@@ -90,7 +97,7 @@ end
 function tcp_mt:readlen(len)
     while true do
         if self.cache then
-            if #(self.cache) == len then
+            if #(self.cache) == len or self.udp then
                 local data = self.cache
                 self.cache = nil
                 return data
@@ -98,6 +105,9 @@ function tcp_mt:readlen(len)
                 local data = string.sub(self.cache, 1, len)
                 self.cache = string.sub(self.cache, len + 1)
                 return data
+            else
+                self.readx_co = coroutine.running()
+                coroutine.yield()
             end
         else
             self.readx_co = coroutine.running()
@@ -170,8 +180,78 @@ local function socket_tcp_new()
     return obj
 end
 
+------------ tcp end ------------
+
+------------ udp bgn ------------
+local udp_mt = {}
+udp_mt.__index = udp_mt
+
+udp_mt.receive = tcp_mt.receive
+udp_mt.readline = tcp_mt.readline
+udp_mt.readlen = tcp_mt.readlen
+
+function udp_mt:setpeername(host, port)
+    self.host = host
+    self.port = port
+
+    self.conn = udpd.new{
+        host = host,
+        port = port,
+        onsendready = function()
+            local count = 0
+            while #(self.sendqueue) > 0 do
+                local query = table.remove(self.sendqueue)
+                count = count + #(query)
+                self.conn:send(query)
+            end
+
+            if self.onsendready_co then
+                coroutine.resume(self.onsendready_co, count)
+                self.onsendready_co = nil
+            end
+        end,
+        onread = function(buf)
+            self.cache = self.cache and (self.cache .. buf) or buf
+
+            if self.readx_co then
+                coroutine.resume(self.readx_co)
+            end
+        end,
+    }
+
+    self.connected = true
+
+    return true
+end
+
+function udp_mt:send(query)
+    if type(query) == "table" then
+        query = table.concat(query)
+    elseif type(query) ~= "string" then
+        return nil, "only accept string or table list of string"
+    end
+
+    table.insert(self.sendqueue, query)
+
+    self.onsendready_co = coroutine.running()
+    self.conn:send_req()
+    return coroutine.yield()
+end
+
+function udp_mt:settimeout()
+    print("set timeout N/I")
+end
+
+local function socket_udp_new()
+    local obj = {sendqueue = {}, udp = true}
+    setmetatable(obj, udp_mt)
+    return obj
+end
+------------ udp end ------------
+
 local ngx_socket = {
-    tcp = socket_tcp_new
+    tcp = socket_tcp_new,
+    udp = socket_udp_new
 }
 
 local function ngx_say(...)
@@ -218,7 +298,14 @@ local ngx_obj = {
     ERR = "[ERRO]",
     config = {
         ngx_lua_version = 9011,
-    }
+    },
+    time = function()
+        local sec,usec = fan.gettime()
+        return sec + usec / 1000000
+    end,
+    re = {
+        sub = function() error("not implemented") end
+    },
 }
 
 local ngx_obj_mt = {
@@ -251,7 +338,7 @@ local function ngx_obj_new(ctx)
         end
         
         ctx.callbacks.onread = function(buf)
-            print("onread", buf)
+            -- print("onread", buf)
             self.cache = self.cache and (self.cache .. buf) or buf
 
             if self.readx_co then
