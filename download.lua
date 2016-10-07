@@ -118,6 +118,7 @@ function task_mt:start()
         end
 
         if not started then
+            self.stop = false
             start_task(self, 0, nil)
         end
     else
