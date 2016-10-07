@@ -10,15 +10,14 @@ serv.onaccept = function(apt)
         print("onread", input:GetString())
     end
 
-    for i=1,10 do
-        if apt.disconnected then
-            break
-        end
+    while true do
         local output = stream.new()
         output:AddString(os.date())
-        apt.fifo_write:send(output:package())
+        if not apt:send(output:package()) then
+            print("break")
+            break
+        end
         fan.sleep(1)
-        print("wake")
     end
 end
 
