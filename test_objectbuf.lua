@@ -1,4 +1,11 @@
 local objectbuf = require "fan.objectbuf"
+local fan = require "fan"
+local cjson = require "cjson"
+
+local function gettime()
+  local sec,usec = fan.gettime()
+  return sec + usec/1000000.0
+end
 
 ttt = "vvv"
 
@@ -21,7 +28,7 @@ local a = {
     averyvery = "long long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long text",
 }
 
-a.b.a = a
+-- a.b.a = a
 
 for i=1,10 do
     table.insert(a.b, "123456789012345678901234567890")
@@ -30,6 +37,28 @@ end
 -- local cjson = require "cjson"
 local sym = objectbuf.symbol({ b = {a = ""}, averyvery = ""})
 
+local loopcount = 10000
+
+local start = gettime()
+for i=1,loopcount do
+    objectbuf.decode(objectbuf.encode(a))
+end
+print(gettime() - start)
+
+local start = gettime()
+for i=1,loopcount do
+    objectbuf.decode(objectbuf.encode(a, sym), sym)
+end
+print(gettime() - start)
+
+local start = gettime()
+for i=1,loopcount do
+    cjson.decode(cjson.encode(a))
+end
+print(gettime() - start)
+
+
+os.exit()
 local buf = objectbuf.encode(a, sym)
 print("#(buf)", #(buf)) -- , #(cjson.encode(a))
 
