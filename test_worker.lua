@@ -22,11 +22,12 @@ local function gettime()
 end
 
 fan.loop(function()
+    commander.wait_all_slaves()
+
     local count = 0
     local last_count = 0
     local last_time = gettime()
 
-    fan.sleep(1)
 
     for i=1,20 do
       local co = coroutine.create(function()
