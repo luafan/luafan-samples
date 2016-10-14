@@ -5,16 +5,13 @@ local md5 = require "md5"
 local slave_task_level = tonumber(arg[3] or 0)
 
 local commander = worker.new({
-    ["test"] = function(x, n, y, s)
-      if slave_task_level > 0 then
-        local d = md5.new()
-        for i=1,slave_task_level do
-          d:update("tt")
-        end
-        return d:digest()
-      end
+    ["test"] = function(x, y)
+      -- local d = md5.new()
+      -- d:update(y)
+      -- return y, d:digest()
+      return y, x
     end
-  }, tonumber(arg[1] or 3), tonumber(arg[2] or 1))
+  }, tonumber(arg[1] or 3), tonumber(arg[2] or 1)) --  "tcp://127.0.0.1:10000"
 
 local function gettime()
   local sec,usec = fan.gettime()
@@ -31,8 +28,11 @@ fan.loop(function()
 
     for i=1,20 do
       local co = coroutine.create(function()
+          local data = string.rep("a", 1024*1024)
           while true do
-            commander:test(1000)
+            local x, y = commander:test(1000, data)
+            assert(x == data)
+            -- assert(y == "7202826a7791073fe2787f0c94603278")
             count = count + 1
           end
         end)
