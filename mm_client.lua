@@ -1,20 +1,48 @@
-local rootPath = "sync"
+local rootPath = "/Volumes/HD/sync"
+
 local remotePath = "/file"
+local remote_url = "https://mm.youchat.me"
+
 local MAX_DOWNLOAD_COUNT = 10
 local MAX_PEER_COUNT = 10
 local PEER_CACHE_SIZE_WATERMARK = 1024 * 512
+
+local BUF_SIZE = 1024 * 1024
+
+local fan = require "fan"
+local worker = require "fan.worker"
+local md5 = require "md5"
+
+local commander = worker.new({
+    ["getfilemd5"] = function(path)
+        local f = io.open(path, "rb")
+        if f then
+            local d = md5.new()
+            while true do
+                local buf = f:read(BUF_SIZE)
+                if not buf then
+                    break
+                else
+                    d:update(buf)
+                end
+            end
+            f:close()
+
+            return d:digest()
+        else
+            return nil
+        end
+    end
+  }, 3, 1)
 
 require "compat53"
 
 local sqlite3 = require "lsqlite3"
 local orm = require "sqlite3.ormlite"
-local remote_url = "https://mm.youchat.me"
-local fan = require "fan"
 local http = require "fan.http"
 local cjson = require "cjson"
 local lpeg = require "lpeg"
 local lfs = require "lfs"
-local md5 = require "md5"
 
 local io = io
 local pairs = pairs
@@ -78,6 +106,9 @@ local task_model = {
     ["status"] = "integer default 0",
 }
 
+-- CREATE INDEX task_path_index on task(path);
+-- CREATE INDEX task_parentpath_index on task(parentpath);
+
 local STATUS_INVALID = -1
 
 local block_model = {
@@ -94,8 +125,6 @@ local context = orm.new(db, {
     ["task"] = task_model,
     ["block"] = block_model
 })
-
-local BUF_SIZE = 1024 * 1024
 
 local function escape_path(path)
     local parts = split(path, "/")
@@ -114,7 +143,8 @@ local function getfilepath(urlpath)
 end
 
 local function is_invalidate_links(links)
-    return not links or #(links) == 0 or (#(links) == 1 and string.find(links[1], "/wenxintishi-", 1, true))
+-- http://bcscdn.baidu.com/issue/netdisk/wenxintishi/%e6%b8%a9%e9%a6%a8%e6%8f%90%e7%a4%ba.avi?response-content-disposition=attachment;%20filename=%e6%b8%a9%e9%a6%a8%e6%8f%90%e7%a4%ba.avi
+    return not links or #(links) == 0 or (#(links) == 1 and string.find(links[1], "/issue/netdisk/wenxintishi/", 1, true))
 end
 
 local function listfiles(path, session)
@@ -135,6 +165,7 @@ end
 
 local function listfilelinks(path, session)
     local url = string.format("%s%s?session=%s", remote_url, escape_path(path), session)
+    print("get", url)
     local ret = http.get{
         url = url
     }
@@ -197,7 +228,9 @@ local function start_task(task, block)
     local peer_flush = function()
         if task.f and peercache_size > 0 then
             task.f:seek("set", block.offset)
-            task.f:write(table.concat(peercache))
+            for i,v in ipairs(peercache) do
+                task.f:write(v)
+            end
             block.offset = block.offset + peercache_size
 
             peercache_size = 0
@@ -206,12 +239,16 @@ local function start_task(task, block)
     end
 
     local url = task.peerurls[math.random(#(task.peerurls))]
-
+    -- print(url)
+    -- print(block.endoffset and string.format("bytes=%1.0f-%1.0f", block.offset, block.endoffset) or string.format("bytes=%1.0f-", block.offset))
+    
     local req = {
         url = url,
         -- verbose = 1,
+    ssl_verifyhost = 0,
+    ssl_verifypeer = 0,
         headers = {
-            ["Range"] = block.endoffset and string.format("bytes=%d-%d", block.offset, block.endoffset) or string.format("bytes=%d-", block.offset)
+            ["Range"] = block.endoffset and string.format("bytes=%1.0f-%1.0f", block.offset, block.endoffset) or string.format("bytes=%1.0f-", block.offset)
         },
         timeout = 30,
         onreceive = function(data)
@@ -286,7 +323,7 @@ local function start_task(task, block)
                 task.partable = false
                 task.offset = 0
             else
-                -- print("unexpect responsecode:", header.responseCode)
+                -- print(url, "unexpect responsecode:", header.responseCode)
                 task.partable = false
                 block.complete = true
             end
@@ -298,6 +335,7 @@ local function start_task(task, block)
             peer_flush()
             block.complete = true
             block.ret = ret
+            -- print("oncomplete")
         end
     }
 
@@ -321,6 +359,7 @@ function task_mt:start()
             while true do
                 local links = listfilelinks(task.path, session_value)
                 if not links then
+                    print("task no links, wait for 10s.")
                     fan.sleep(10)
                 elseif not is_invalidate_links(links) then
                     self.peerurls = links
@@ -398,6 +437,32 @@ function task_mt:info()
         estimate = (self.length and self.speed > 0) and format_time(unfinished / self.speed) or "N/A"
     }
 
+end
+
+local function verify_task_md5(r)
+    if r.completed == 1 then
+        if r.verified == 0 then
+            print(r.path, "verifying md5 ...")
+            local current_md5 = commander:getfilemd5(getfilepath(r.path))
+            if current_md5 then
+                if current_md5 == r.md5 or current_md5 == r.lastfailedmd5 then
+                    print(r.path, "md5 verified.")
+                    r.verified = 1
+                    r:update()
+                else
+                    print(r.path, "md5 verify failed, marked as not complete.")
+                    os.remove(getfilepath(r.path))
+                    r.completed = 0
+                    r.lastfailedmd5 = current_md5
+                    r:update()
+                end
+            else
+                print(r.path, "missing, marked as not complete.")
+                r.completed = 0
+                r:update()
+            end
+        end
+    end
 end
 
 function task_mt:lifecycle()
@@ -487,10 +552,14 @@ function task_mt:lifecycle()
 
         self.task.completed = 1
         self.task:update()
+        print("finished", self.task.path)
+
+        coroutine.wrap(verify_task_md5)(self.task)
     end
 end
 
 local function add(taskid, peerurls)
+    print("add", taskid)
     local task = {
         taskid = taskid,
         peerurls = peerurls,
@@ -566,6 +635,8 @@ local function syncdiff(cursor)
                     })                
                 end
             end
+
+            fan.sleep(0.001)
         end
     end
 
@@ -620,9 +691,11 @@ local function addtask(path, session)
     end
 end
 
+local sep = string.rep("-", 20)
+
 local function infolist()
     while true do
-        print(string.rep("-", 20))
+        -- print("\x1Bc")
         local tasks = download.list()
         print("total tasks:", #(tasks))
         -- for k,v in pairs(tasks) do
@@ -636,7 +709,9 @@ local function infolist()
         local completedlist = {}
 
         for _,v in ipairs(tasks) do
+            -- print("lifecycle...", v.path)
             v:lifecycle()
+            -- print("lifecycled", v.path)
             v:save()
             if v.task.completed == 0 then
                 local info = v:info()
@@ -663,7 +738,8 @@ local function infolist()
 
         if count < MAX_DOWNLOAD_COUNT then
             if download_queue_co then
-                coroutine.resume(download_queue_co)
+                fan.sleep(0.001)
+                print(coroutine.resume(download_queue_co))
             end
         end
 
@@ -674,11 +750,18 @@ local function infolist()
             os.exit(0)
         end
 
+        -- print("collectgarbage start")
+        -- collectgarbage()
+        -- print("collectgarbage done.")
+        print("sleep 2")
         fan.sleep(2)
+        print("wake")
     end
 end
 
 local function main()
+    commander.wait_all_slaves()
+
     local session = context.setting("one", "where key=?", "session")
     if not session then
         local ret = http.post{
@@ -726,49 +809,23 @@ local function main()
 
     local total = 0
     context.task(function(r)
-        if r.completed == 1 then
-            if r.verified == 0 then
-                local f = io.open(getfilepath(r.path), "rb")
-                if f then
-                    local d = md5.new()
-                    while true do
-                        local buf = f:read(BUF_SIZE)
-                        if not buf then
-                            break
-                        else
-                            d:update(buf)
-                            fan.sleep(0.001)
-                        end
-                    end
-                    f:close()
-
-                    local current_md5 = d:digest()
-
-                    if current_md5 == r.md5 or current_md5 == r.lastfailedmd5 then
-                        r.verified = 1
-                        r:update()
-                    else
-                        print(r.path, "md5 verify failed, marked as not complete.")
-                        os.remove(getfilepath(r.path))
-                        r.completed = 0
-                        r.lastfailedmd5 = current_md5
-                        r:update()
-                    end
-                else
-                    print(r.path, "missing, marked as not complete.")
-                    r.completed = 0
-                    r:update()
-                end
-            end
+        if #(download.list()) >= MAX_DOWNLOAD_COUNT then
+            download_queue_co = coroutine.running()
+            coroutine.yield()
+            download_queue_co = nil
         end
+
+        verify_task_md5(r)
 
         if r.completed == 1 then
             return
         end
 
+        local links
         while true do
-            local links = listfilelinks(r.path, session.value)
+            links = listfilelinks(r.path, session_value)
             if not links then
+                print("can't get links, wait for 10s...")
                 fan.sleep(10)
             elseif is_invalidate_links(links) then
                 r.status = STATUS_INVALID
@@ -777,12 +834,6 @@ local function main()
             else
                 break
             end
-        end
-
-        if #(download.list()) >= MAX_DOWNLOAD_COUNT then
-            download_queue_co = coroutine.running()
-            coroutine.yield()
-            download_queue_co = nil
         end
 
         local task = download.add(r.id, links)
