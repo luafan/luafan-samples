@@ -47,8 +47,21 @@ local commander = worker.new({
 
       f:seek("set", offset)
       f:write(buf)
-    end
-  }, 1, 4)
+    end,
+    ["pathflush"] = function(path)
+      local f = file_map[path]
+      if f then
+        f:flush()
+      end
+    end,
+    ["pathclose"] = function(path)
+      local f = file_map[path]
+      if f then
+        f:close()
+        file_map[path] = nil
+      end
+    end,
+  }, 1, 1)
 
 require "compat53"
 
@@ -241,15 +254,14 @@ local function start_task(task, block)
   local peercache_size = 0
 
   local peer_flush = function()
-    if task.f and peercache_size > 0 then
-      task.f:seek("set", block.offset)
-      for i,v in ipairs(peercache) do
-        task.f:write(v)
-      end
+    if peercache_size > 0 then
+      local oldoffset = block.offset
+      local data = table.concat(peercache)
       block.offset = block.offset + peercache_size
-
       peercache_size = 0
       peercache = {}
+
+      commander:pathwrite(task.path, oldoffset, data)
     end
   end
 
@@ -272,6 +284,11 @@ local function start_task(task, block)
         return 0
       end
 
+      if block.complete or (block.endoffset and block.offset > block.endoffset) then
+        -- print("block completed, abort", block.complete, block.offset, block.endoffset)
+        return 0 -- abort download
+      end
+
       if not block.complete then
         local data_size = #(data)
         table.insert(peercache, data)
@@ -283,11 +300,6 @@ local function start_task(task, block)
         else
           peer_flush()
         end
-      end
-
-      if block.complete or (block.endoffset and block.offset > block.endoffset) then
-        -- print("block completed, abort", block.complete, block.offset, block.endoffset)
-        return 0 -- abort download
       end
     end,
     onheader = function(header)
@@ -387,12 +399,6 @@ function task_mt:start()
 
     self.path = getfilepath(task.path)
 
-    local f = io.open(self.path, "rb+")
-    if not f then
-      f = io.open(self.path, "wb")
-    end
-    self.f = f
-
     local blocks = context.block("list", "where taskid=?", task.id)
 
     if #(blocks) > 0 then
@@ -411,9 +417,7 @@ function task_mt:start()
 end
 
 function task_mt:save()
-  if self.f then
-    self.f:flush()
-  end
+  commander:pathflush(self.path)
 
   for k,v in pairs(self.blocks) do
     v:update()
@@ -559,16 +563,13 @@ function task_mt:lifecycle()
   end
 
   if self.length and taskcount == 0 and self.task.completed == 0 then
-    if self.f then
-      self.f:close()
-      self.f = nil
-    end
     self.stop = true
 
     self.task.completed = 1
     self.task:update()
     print("finished", self.task.path)
 
+    commander:pathclose(self.path)
     coroutine.wrap(verify_task_md5)(self.task)
   end
 end
