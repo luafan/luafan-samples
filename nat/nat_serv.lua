@@ -33,7 +33,7 @@ function command_map.list(apt, msg)
 end
 
 fan.loop(function()
-    serv = connector.bind("udp://127.0.0.1:10000")
+    serv = connector.bind("udp://0.0.0.0:10000")
     serv.onaccept = function(apt)
       print("onaccept")
       conn_map[apt] = {last_keepalive = utils.gettime()}

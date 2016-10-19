@@ -17,7 +17,7 @@ local connkey_conn_map = {}
 
 local command_map = {}
 
-local clientkey = arg[1] or utils.random_string(utils.LETTERS_W, 8)
+local clientkey = arg[1] and string.format("%s-%s", arg[1], utils.random_string(utils.LETTERS_W, 8)) or utils.random_string(utils.LETTERS_W, 16)
 
 print("clientkey", clientkey)
 
@@ -29,6 +29,7 @@ end
 
 local function send(msg, ...)
   msg.clientkey = clientkey
+  -- print("send", cjson.encode(msg))
   return cli:send(objectbuf.encode(msg), ...)
 end
 
@@ -47,8 +48,10 @@ function command_map.ppconnect(host, port, msg)
   local peer = peer_map[msg.clientkey]
   local obj
 
+  print(host, port, cjson.encode(msg))
+
   obj = {
-    connkey = connkey,
+    connkey = msg.connkey,
     peer = peer,
     host = host,
     port = port,
@@ -65,8 +68,8 @@ function command_map.ppconnect(host, port, msg)
         table.insert(obj.input_queue, buf)
         sync_port()
       end,
-      ondisconnected = function(msg)
-        print("remote disconnected", msg)
+      ondisconnected = function(msgstr)
+        print("remote disconnected", msgstr)
         send({type = "ppdisconnectedmaster", connkey = msg.connkey}, obj.host, obj.port)
       end
     }
@@ -77,6 +80,8 @@ function command_map.ppconnect(host, port, msg)
 end
 
 function command_map.ppconnected(host, port, msg)
+  print(host, port, cjson.encode(msg))
+
   local obj = connkey_conn_map[msg.connkey]
   obj.connected = true
 
@@ -87,19 +92,22 @@ function command_map.ppdisconnectedmaster(host, port, msg)
   local obj = connkey_conn_map[msg.connkey]
   connkey_conn_map[msg.connkey] = nil
   -- clean up client apt.
-
-  obj.t.conn_map[obj.apt] = nil
-  obj.apt:close()
-  obj.apt = nil
+  if obj then
+    obj.t.conn_map[obj.apt] = nil
+    obj.apt:close()
+    obj.apt = nil
+  end
 end
 
 function command_map.ppdisconnectedclient(host, port, msg)
   local obj = connkey_conn_map[msg.connkey]
   -- clean up server conn.
-  obj.peer.conn_map[msg.connkey] = nil
-  connkey_conn_map[msg.connkey] = nil
-  obj.conn:close()
-  obj.conn = nil
+  if obj then
+    obj.peer.conn_map[msg.connkey] = nil
+    connkey_conn_map[msg.connkey] = nil
+    obj.conn:close()
+    obj.conn = nil
+  end
 end
 
 function command_map.ppdata_req(host, port, msg)
@@ -113,7 +121,7 @@ function command_map.ppdata_resp(host, port, msg)
 end
 
 function command_map.ppkeepalive(host, port, msg)
-  -- print(host, port, cjson.encode(msg))
+  print(host, port, cjson.encode(msg))
 
   local peer = peer_map[msg.clientkey]
   if not peer then
@@ -128,7 +136,7 @@ local function list_peers()
   while true do
     send{type = "list"}
     -- send{type = "keepalive"}
-    fan.sleep(1)
+    fan.sleep(3)
   end
 end
 
@@ -232,7 +240,13 @@ fan.loop(function()
             return resp:reply(200, "OK", "bind already.")
           end
 
-          local peer = peer_map[params.clientkey]
+          local peer = nil
+          for k,v in pairs(peer_map) do
+            if k:find(params.clientkey) == 1 then
+              peer = v
+              break
+            end
+          end
           if not peer then
             return resp:reply(200, "OK", "NAT not completed.")
           end
