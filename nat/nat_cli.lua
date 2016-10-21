@@ -1,4 +1,5 @@
 local fan = require "fan"
+local config = require "config"
 local connector = require "fan.connector"
 local objectbuf = require "fan.objectbuf"
 local utils = require "fan.utils"
@@ -6,7 +7,21 @@ local utils = require "fan.utils"
 local cjson = require "cjson"
 require "compat53"
 
-local cli = connector.connect("udp://127.0.0.1:10000")
+local sym = objectbuf.symbol(require "nat_dic")
+
+local internal_host
+local internal_port
+
+for i,v in ipairs(fan.getinterfaces()) do
+  if v.type == "inet" then
+    print(cjson.encode(v))
+    if v.name == "wlp3s0" or v.name == "en0" then
+      internal_host = v.host
+    end
+  end
+end
+
+local cli = connector.connect("udp://120.27.39.178:10000")
 local peer_map = {}
 local bind_map = {}
 
@@ -16,6 +31,8 @@ local index_conn_map = {}
 local connkey_conn_map = {}
 
 local command_map = {}
+
+local allowed_map = {}
 
 local clientkey = arg[1] and string.format("%s-%s", arg[1], utils.random_string(utils.LETTERS_W, 8)) or utils.random_string(utils.LETTERS_W, 16)
 
@@ -30,13 +47,28 @@ end
 local function send(msg, ...)
   msg.clientkey = clientkey
   -- print("send", cjson.encode(msg))
-  return cli:send(objectbuf.encode(msg), ...)
+  return cli:send(objectbuf.encode(msg, sym), ...)
 end
 
 function command_map.list(host, port, msg)
+  internal_port = cli.conn:getPort()
+  print(cjson.encode(msg))
+
+  allowed_map = {}
   for i,v in ipairs(msg.data) do
+    local t = allowed_map[v.host]
+    if not t then
+      t = {}
+      allowed_map[v.host] = t
+    end
+    t[v.port] = v
+  end
+
+  for i,v in ipairs(msg.data) do
+    print("list", i, cjson.encode(v))
     local peer = peer_map[v.clientkey]
     -- if not peer then
+    -- print("send ppkeepalive", v.host, v.port)
     send({type = "ppkeepalive"}, v.host, v.port)
     -- else
     -- print("ignore nat", v.clientkey, peer)
@@ -56,6 +88,7 @@ function command_map.ppconnect(host, port, msg)
     host = host,
     port = port,
     forward_index = nil,
+    auto_index = 0,
     input_queue = {},
     conn = tcpd.connect{
       host = msg.host,
@@ -113,15 +146,21 @@ end
 function command_map.ppdata_req(host, port, msg)
   local obj = connkey_conn_map[msg.connkey]
   obj.conn:send(msg.data)
+
+  msg.data = nil
+  print(os.date("%X"), host, port, cjson.encode(msg))
 end
 
 function command_map.ppdata_resp(host, port, msg)
   local obj = connkey_conn_map[msg.connkey]
   obj.apt:send(msg.data)
+
+  msg.data = nil
+  print(os.date("%X"), host, port, cjson.encode(msg))
 end
 
 function command_map.ppkeepalive(host, port, msg)
-  print(host, port, cjson.encode(msg))
+  print(os.date("%X"), host, port, cjson.encode(msg))
 
   local peer = peer_map[msg.clientkey]
   if not peer then
@@ -134,14 +173,16 @@ end
 
 local function list_peers()
   while true do
-    send{type = "list"}
+    send{type = "list", internal_host = internal_host, internal_port = internal_port}
     -- send{type = "keepalive"}
     fan.sleep(3)
+    print(string.format("udp send: %d, receive: %d", config.udp_send_total, config.udp_receive_total))
   end
 end
 
 local function keepalive_peers()
   while true do
+    sync_port()
     for k,v in pairs(peer_map) do
       send({type = "ppkeepalive"}, v.host, v.port)
     end
@@ -178,7 +219,8 @@ local function sync_port_buffers()
         if not obj.forward_index and #(obj.input_queue) > 0 then
           local data = table.concat(obj.input_queue)
           obj.input_queue = {}
-          obj.forward_index = send({type = "ppdata_resp", connkey = connkey, data = data}, obj.host, obj.port)
+          obj.auto_index = obj.auto_index + 1
+          obj.forward_index = send({type = "ppdata_resp", connkey = connkey, data = data, index = obj.auto_index}, obj.host, obj.port)
           -- print("forward to client", obj.forward_index)
           index_conn_map[obj.forward_index] = obj
           count = count + 1
@@ -191,7 +233,8 @@ local function sync_port_buffers()
       if obj.connected and not obj.forward_index and #(obj.input_queue) > 0 then
         local data = table.concat(obj.input_queue)
         obj.input_queue = {}
-        obj.forward_index = send({type = "ppdata_req", connkey = connkey, data = data}, obj.host, obj.port)
+        obj.auto_index = obj.auto_index + 1
+        obj.forward_index = send({type = "ppdata_req", connkey = connkey, data = data, index = obj.auto_index}, obj.host, obj.port)
         -- print("forward to server", obj.forward_index)
         index_conn_map[obj.forward_index] = obj
         count = count + 1
@@ -207,7 +250,7 @@ end
 fan.loop(function()
     -- cli = connector.connect("udp://mkgitserver.successinfo.com.cn:8802")
     cli.onread = function(body, host, port)
-      local msg = objectbuf.decode(body)
+      local msg = objectbuf.decode(body, sym)
       -- print(host, port, cjson.encode(msg))
 
       local command = command_map[msg.type]
@@ -225,12 +268,25 @@ fan.loop(function()
       end
     end
 
+    cli.ontimeout = function(package, host, port)
+      if host and port then
+        local alive = allowed_map[host] and allowed_map[host][port]
+        if not alive then
+          print("drop", #(package), host, port)
+        end
+      else
+        return true
+      end
+    end
+
     coroutine.wrap(list_peers)()
     coroutine.wrap(keepalive_peers)()
     coroutine.wrap(sync_port_buffers)()
 
+    local connkey_index = 0
+
     local httpd = require "fan.httpd"
-    serv = httpd.bind{
+    debug_console_serv = httpd.bind{
       port = tonumber(arg[2]),
       onService = function(req, resp)
         local params = req.params
@@ -270,8 +326,11 @@ fan.loop(function()
                   host = peer.host,
                   port = peer.port,
                   forward_index = nil,
-                  connkey = utils.random_string(utils.LETTERS_W, 16)
+                  auto_index = 0,
                 }
+
+                connkey_index = connkey_index + 1
+                d.connkey = connkey_index
 
                 t.conn_map[apt] = d
                 connkey_conn_map[d.connkey] = d

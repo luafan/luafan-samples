@@ -6,13 +6,19 @@ local utils = require "fan.utils"
 local cjson = require "cjson"
 require "compat53"
 
+local sym = objectbuf.symbol(require "nat_dic")
+
 local conn_map = {}
 local command_map = {}
 
 function command_map.list(apt, msg)
   local conn = conn_map[apt]
-  if not conn.clientkey then
+  if msg.clientkey then
     conn.clientkey = msg.clientkey
+  end
+  if msg.internal_host and msg.internal_port then
+    conn.internal_host = msg.internal_host
+    conn.internal_port = msg.internal_port
   end
 
   local t = {}
@@ -20,16 +26,25 @@ function command_map.list(apt, msg)
 
   for k,v in pairs(conn_map) do
     if k ~= apt then
-      local dest = k.dest
-      table.insert(t, {
-          host = dest:getHost(),
-          port = dest:getPort(),
-          clientkey = v.clientkey,
-        })
+      if apt.host == k.host then
+        if v.internal_host and v.internal_port then
+          table.insert(t, {
+              host = v.internal_host,
+              port = v.internal_port,
+              clientkey = v.clientkey,
+            })
+        end
+      else
+        table.insert(t, {
+            host = k.host,
+            port = k.port,
+            clientkey = v.clientkey,
+          })
+      end
     end
   end
 
-  apt:send(objectbuf.encode{type = msg.type, data = t})
+  apt:send(objectbuf.encode({type = msg.type, data = t}, sym))
 end
 
 fan.loop(function()
@@ -41,8 +56,8 @@ fan.loop(function()
       apt.onread = function(body)
         conn_map[apt].last_keepalive = utils.gettime()
 
-        local msg = objectbuf.decode(body)
-        print(cjson.encode(msg))
+        local msg = objectbuf.decode(body, sym)
+        print(apt.host, apt.port, cjson.encode(msg))
 
         local command = command_map[msg.type]
         if command then
