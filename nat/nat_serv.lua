@@ -38,6 +38,8 @@ function command_map.list(apt, msg)
         table.insert(t, {
             host = k.host,
             port = k.port,
+            internal_host = v.internal_host,
+            internal_port = v.internal_port,            
             clientkey = v.clientkey,
           })
       end

@@ -32,6 +32,7 @@ local connkey_conn_map = {}
 
 local command_map = {}
 
+local ppkeepalive_map = {}
 local allowed_map = {}
 
 local clientkey = arg[1] and string.format("%s-%s", arg[1], utils.random_string(utils.LETTERS_W, 8)) or utils.random_string(utils.LETTERS_W, 16)
@@ -62,6 +63,15 @@ function command_map.list(host, port, msg)
       allowed_map[v.host] = t
     end
     t[v.port] = v
+
+    if v.internal_host and v.internal_port then
+      local t = allowed_map[v.internal_host]
+      if not t then
+        t = {}
+        allowed_map[v.internal_host] = t
+      end
+      t[v.internal_port] = v
+    end
   end
 
   for i,v in ipairs(msg.data) do
@@ -69,7 +79,13 @@ function command_map.list(host, port, msg)
     local peer = peer_map[v.clientkey]
     -- if not peer then
     -- print("send ppkeepalive", v.host, v.port)
-    send({type = "ppkeepalive"}, v.host, v.port)
+    local output_index = send({type = "ppkeepalive"}, v.host, v.port)
+    ppkeepalive_map[output_index] = true
+
+    if v.internal_host and v.internal_port then
+      local output_index = send({type = "ppkeepalive"}, v.internal_host, v.internal_port)
+      ppkeepalive_map[output_index] = true
+    end
     -- else
     -- print("ignore nat", v.clientkey, peer)
     -- end
@@ -122,6 +138,7 @@ function command_map.ppconnected(host, port, msg)
 end
 
 function command_map.ppdisconnectedmaster(host, port, msg)
+  print(host, port, cjson.encode(msg))
   local obj = connkey_conn_map[msg.connkey]
   connkey_conn_map[msg.connkey] = nil
   -- clean up client apt.
@@ -133,6 +150,7 @@ function command_map.ppdisconnectedmaster(host, port, msg)
 end
 
 function command_map.ppdisconnectedclient(host, port, msg)
+  print(host, port, cjson.encode(msg))
   local obj = connkey_conn_map[msg.connkey]
   -- clean up server conn.
   if obj then
@@ -155,8 +173,9 @@ function command_map.ppdata_resp(host, port, msg)
   local obj = connkey_conn_map[msg.connkey]
   obj.apt:send(msg.data)
 
+  local len = #(msg.data)
   msg.data = nil
-  print(os.date("%X"), host, port, cjson.encode(msg))
+  print(os.date("%X"), host, port, cjson.encode(msg), len)
 end
 
 function command_map.ppkeepalive(host, port, msg)
@@ -221,7 +240,7 @@ local function sync_port_buffers()
           obj.input_queue = {}
           obj.auto_index = obj.auto_index + 1
           obj.forward_index = send({type = "ppdata_resp", connkey = connkey, data = data, index = obj.auto_index}, obj.host, obj.port)
-          -- print("forward to client", obj.forward_index)
+          print("forwarding to client", obj.forward_index)
           index_conn_map[obj.forward_index] = obj
           count = count + 1
         end
@@ -235,7 +254,7 @@ local function sync_port_buffers()
         obj.input_queue = {}
         obj.auto_index = obj.auto_index + 1
         obj.forward_index = send({type = "ppdata_req", connkey = connkey, data = data, index = obj.auto_index}, obj.host, obj.port)
-        -- print("forward to server", obj.forward_index)
+        print("forwarding to server", obj.forward_index)
         index_conn_map[obj.forward_index] = obj
         count = count + 1
       end
@@ -265,6 +284,8 @@ fan.loop(function()
       if obj then
         obj.forward_index = nil
         sync_port()
+      elseif ppkeepalive_map[index] then
+        ppkeepalive_map[index] = nil
       end
     end
 
@@ -273,10 +294,20 @@ fan.loop(function()
         local alive = allowed_map[host] and allowed_map[host][port]
         if not alive then
           print("drop", #(package), host, port)
+          return false
+        else
+          local output_index = string.unpack("<I2", package)
+          if ppkeepalive_map[output_index] then
+            ppkeepalive_map[output_index] = nil
+            print("drop ppkeepalive")
+            return false
+          end
         end
       else
         return true
       end
+
+      return true
     end
 
     coroutine.wrap(list_peers)()
@@ -290,7 +321,26 @@ fan.loop(function()
       port = tonumber(arg[2]),
       onService = function(req, resp)
         local params = req.params
-        if params.action == "bind" then
+        if params.action == "incoming" then
+          resp:addheader("Content-Type", "text/plain; charset=UTF-8")
+          resp:reply_start(200, "OK")
+          for key,incoming in pairs(cli._incoming_map) do
+            resp:reply_chunk(string.format("%s\n", key))
+            for output_index,incoming_object in pairs(incoming) do
+              if incoming_object.done then
+                resp:reply_chunk(string.format("%06d\treceived %d\n", output_index, incoming_object.count))
+              else
+                local count = 0
+                for idx,body in pairs(incoming_object.items) do
+                  count = count + 1
+                end
+
+                resp:reply_chunk(string.format("%06d\treceiving %d/%d\n", output_index, count, incoming_object.count))
+              end
+            end
+          end
+          return resp:reply_end()
+        elseif params.action == "bind" then
           local port = tonumber(params.port)
           if bind_map[port] then
             return resp:reply(200, "OK", "bind already.")
