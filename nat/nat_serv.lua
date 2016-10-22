@@ -19,6 +19,7 @@ function command_map.list(apt, msg)
   if msg.internal_host and msg.internal_port then
     conn.internal_host = msg.internal_host
     conn.internal_port = msg.internal_port
+    conn.internal_netmask = msg.internal_netmask
   end
 
   local t = {}
@@ -38,8 +39,8 @@ function command_map.list(apt, msg)
         table.insert(t, {
             host = k.host,
             port = k.port,
-            internal_host = v.internal_host,
-            internal_port = v.internal_port,            
+            internal_host = conn.internal_netmask == apt.internal_netmask and v.internal_host or nil,
+            internal_port = conn.internal_netmask == apt.internal_netmask and v.internal_port or nil,
             clientkey = v.clientkey,
           })
       end
