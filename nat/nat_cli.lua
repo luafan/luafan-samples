@@ -16,7 +16,7 @@ local internal_netmask
 for i,v in ipairs(fan.getinterfaces()) do
   if v.type == "inet" then
     print(cjson.encode(v))
-    if v.name == "wlp3s0" or v.name == "en0" then
+    if v.name == "wlp3s0" or v.name == "en0" or v.name == "eth0" then
       internal_host = v.host
       internal_netmask = v.netmask
     end
@@ -78,15 +78,20 @@ function command_map.list(host, port, msg)
   for i,v in ipairs(msg.data) do
     print("list", i, cjson.encode(v))
     local peer = peer_map[v.clientkey]
+    if peer then
+      local output_index = send({type = "ppkeepalive"}, peer.host, peer.port)
+      ppkeepalive_map[output_index] = true
+    else
+      local output_index = send({type = "ppkeepalive"}, v.host, v.port)
+      ppkeepalive_map[output_index] = true
+
+      if v.internal_host and v.internal_port then
+        local output_index = send({type = "ppkeepalive"}, v.internal_host, v.internal_port)
+        ppkeepalive_map[output_index] = true
+      end
+    end
     -- if not peer then
     -- print("send ppkeepalive", v.host, v.port)
-    local output_index = send({type = "ppkeepalive"}, v.host, v.port)
-    ppkeepalive_map[output_index] = true
-
-    if v.internal_host and v.internal_port then
-      local output_index = send({type = "ppkeepalive"}, v.internal_host, v.internal_port)
-      ppkeepalive_map[output_index] = true
-    end
     -- else
     -- print("ignore nat", v.clientkey, peer)
     -- end
@@ -200,7 +205,7 @@ local function list_peers()
     send{type = "list", internal_host = internal_host, internal_port = internal_port, internal_netmask = internal_netmask}
     -- send{type = "keepalive"}
     fan.sleep(3)
-    print(string.format("udp send: %d, receive: %d", config.udp_send_total, config.udp_receive_total))
+    print(string.format("udp send: %d, receive: %d, resend: %d, waiting: %d", config.udp_send_total, config.udp_receive_total, config.udp_resend_total, cli._output_wait_count))
   end
 end
 
