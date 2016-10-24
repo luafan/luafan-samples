@@ -205,7 +205,8 @@ local function list_peers()
     send{type = "list", internal_host = internal_host, internal_port = internal_port, internal_netmask = internal_netmask}
     -- send{type = "keepalive"}
     fan.sleep(3)
-    print(string.format("udp send: %d, receive: %d, resend: %d, waiting: %d", config.udp_send_total, config.udp_receive_total, config.udp_resend_total, cli._output_wait_count))
+    print(string.format("udp send: %d, receive: %d, resend: %d, waiting: %d, ack_total: %d",
+        config.udp_send_total, config.udp_receive_total, config.udp_resend_total, cli._output_wait_count, cli.output_wait_ack_total))
   end
 end
 
@@ -251,7 +252,9 @@ local function sync_port_buffers()
           local auto_index = obj.auto_index + 1
           obj.auto_index = auto_index
           obj.forward_index = send({type = "ppdata_resp", connkey = connkey, data = data, index = auto_index}, obj.host, obj.port)
-          print("forwarding to client", obj.forward_index, auto_index)
+          if config.debug then
+            print("forwarding to client", obj.forward_index, auto_index)
+          end
           index_conn_map[obj.forward_index] = obj
           count = count + 1
         end
@@ -266,7 +269,9 @@ local function sync_port_buffers()
         local auto_index = obj.auto_index + 1
         obj.auto_index = auto_index
         obj.forward_index = send({type = "ppdata_req", connkey = connkey, data = data, index = auto_index}, obj.host, obj.port)
-        print("forwarding to server", obj.forward_index, auto_index)
+        if config.debug then
+          print("forwarding to server", obj.forward_index, auto_index)
+        end
         index_conn_map[obj.forward_index] = obj
         count = count + 1
       end
