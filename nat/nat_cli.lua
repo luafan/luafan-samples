@@ -234,7 +234,7 @@ local function keepalive_peers()
     end
 
     for k,v in pairs(peer_map) do
-      if utils.gettime() - v.apt.last_keepalive > 300 then
+      if utils.gettime() - v.apt.last_keepalive > 30 then
         v.apt:cleanup()
         print(k, "keepalive timeout.")
         for port,t in pairs(bind_map) do
@@ -271,8 +271,8 @@ local function sync_port_buffers()
     for ckey,peer in pairs(peer_map) do
       for connkey,obj in pairs(peer.conn_map) do
         if not obj.forward_index and #(obj.input_queue) > 0 then
-          local data = table.concat(obj.input_queue)
-          obj.input_queue = {}
+          local data = table.remove(obj.input_queue, 1)
+          -- obj.input_queue = {}
           local auto_index = obj.auto_index + 1
           obj.auto_index = auto_index
           obj.forward_index = send(peer.apt, {
@@ -293,8 +293,8 @@ local function sync_port_buffers()
     for connkey,obj in pairs(connkey_conn_map) do
       -- print(obj, obj.connected, obj.forward_index, #(obj.input_queue))
       if obj.connected and not obj.forward_index and #(obj.input_queue) > 0 then
-        local data = table.concat(obj.input_queue)
-        obj.input_queue = {}
+        local data = table.remove(obj.input_queue, 1)
+        -- obj.input_queue = {}
         local auto_index = obj.auto_index + 1
         obj.auto_index = auto_index
         obj.forward_index = send(obj.peer.apt, {
