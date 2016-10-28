@@ -179,7 +179,9 @@ end
 
 function command_map.ppdata_resp(host, port, msg)
   local obj = connkey_conn_map[msg.connkey]
-  obj.apt:send(msg.data)
+  if obj then
+    obj.apt:send(msg.data)
+  end
 
   -- local len = #(msg.data)
   -- msg.data = nil
@@ -218,7 +220,7 @@ local function keepalive_peers()
     end
 
     for k,v in pairs(peer_map) do
-      if utils.gettime() - v.last_keepalive > 30 then
+      if utils.gettime() - v.last_keepalive > 300 then
         cli:cleanup(v.host, v.port)
         print(k, "keepalive timeout.")
         for port,t in pairs(bind_map) do
