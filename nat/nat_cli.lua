@@ -33,8 +33,6 @@ local bind_map = {}
 
 local sync_port_running = nil
 
-local connkey_conn_map = {}
-
 local command_map = {}
 
 local allowed_map = {}
@@ -46,6 +44,14 @@ print("clientkey", clientkey)
 local function sync_port()
   if sync_port_running then
     coroutine.resume(sync_port_running)
+  end
+end
+
+local function get_peer(apt)
+  for k,v in pairs(peer_map) do
+    if v.apt == apt then
+      return v
+    end
   end
 end
 
@@ -118,7 +124,6 @@ function command_map.ppconnect(apt, host, port, msg)
 
   obj = {
     connkey = msg.connkey,
-    peer = peer,
     host = host,
     port = port,
     forward_index = nil,
@@ -129,6 +134,7 @@ function command_map.ppconnect(apt, host, port, msg)
       port = msg.port,
       onconnected = function()
         print("onconnected")
+        obj.connected = true
         send(apt, {type = "ppconnected", connkey = msg.connkey})
       end,
       onread = function(buf)
@@ -136,20 +142,20 @@ function command_map.ppconnect(apt, host, port, msg)
         sync_port()
       end,
       ondisconnected = function(msgstr)
+        obj.connected = nil
         print("remote disconnected", msgstr)
         send(apt, {type = "ppdisconnectedmaster", connkey = msg.connkey})
       end
     }
   }
 
-  connkey_conn_map[msg.connkey] = obj
-  peer.conn_map[msg.connkey] = obj
+  peer.ppservice_connection_map[msg.connkey] = obj
 end
 
 function command_map.ppconnected(apt, host, port, msg)
   print(host, port, cjson.encode(msg))
-
-  local obj = connkey_conn_map[msg.connkey]
+  local peer = get_peer(apt)
+  local obj = peer.ppclient_connection_map[msg.connkey]
   obj.connected = true
 
   sync_port()
@@ -157,11 +163,12 @@ end
 
 function command_map.ppdisconnectedmaster(apt, host, port, msg)
   print(host, port, cjson.encode(msg))
-  local obj = connkey_conn_map[msg.connkey]
-  connkey_conn_map[msg.connkey] = nil
+  local peer = get_peer(apt)
+  local obj = peer.ppclient_connection_map[msg.connkey]
+  peer.ppclient_connection_map[msg.connkey] = nil
   -- clean up client apt.
   if obj then
-    obj.t.conn_map[obj.apt] = nil
+    obj.connected = nil
     obj.apt:close()
     obj.apt = nil
   end
@@ -169,18 +176,20 @@ end
 
 function command_map.ppdisconnectedclient(apt, host, port, msg)
   print(host, port, cjson.encode(msg))
-  local obj = connkey_conn_map[msg.connkey]
+  local peer = get_peer(apt)
+  local obj = peer.ppservice_connection_map[msg.connkey]
   -- clean up server conn.
   if obj then
-    obj.peer.conn_map[msg.connkey] = nil
-    connkey_conn_map[msg.connkey] = nil
+    obj.connected = nil
+    peer.ppservice_connection_map[msg.connkey] = nil
     obj.conn:close()
     obj.conn = nil
   end
 end
 
 function command_map.ppdata_req(apt, host, port, msg)
-  local obj = connkey_conn_map[msg.connkey]
+  local peer = get_peer(apt)
+  local obj = peer.ppservice_connection_map[msg.connkey]
   if obj then
     obj.conn:send(msg.data)
   end
@@ -190,8 +199,9 @@ function command_map.ppdata_req(apt, host, port, msg)
 end
 
 function command_map.ppdata_resp(apt, host, port, msg)
-  local obj = connkey_conn_map[msg.connkey]
-  if obj then
+  local peer = get_peer(apt)
+  local obj = peer.ppclient_connection_map[msg.connkey]
+  if obj and obj.connected then
     obj.apt:send(msg.data)
   end
 
@@ -201,16 +211,19 @@ function command_map.ppdata_resp(apt, host, port, msg)
 end
 
 function command_map.ppkeepalive(apt, host, port, msg)
-  -- print(os.date("%X"), host, port, cjson.encode(msg))
-
+  if config.debug then
+    print(os.date("%X"), host, port, cjson.encode(msg))
+  end
   local peer = peer_map[msg.clientkey]
   if not peer then
     peer = {
       apt = apt,
       host = host,
       port = port,
-      conn_map = {},
+      ppservice_connection_map = {},
+      ppclient_connection_map = {},
     }
+
     peer_map[msg.clientkey] = peer
   else
     peer.host = host
@@ -229,30 +242,33 @@ end
 local function keepalive_peers()
   while true do
     sync_port()
-    for k,v in pairs(peer_map) do
-      send(v.apt, {type = "ppkeepalive"})
+    for k,peer in pairs(peer_map) do
+      if utils.gettime() - peer.apt.last_keepalive > 10 then
+        local output_index = send(peer.apt, {type = "ppkeepalive"})
+        peer.apt.ppkeepalive_map[output_index] = true
+      end
     end
 
-    for k,v in pairs(peer_map) do
-      if utils.gettime() - v.apt.last_keepalive > 30 then
-        v.apt:cleanup()
+    for k,peer in pairs(peer_map) do
+      if utils.gettime() - peer.apt.last_keepalive > 20 then
+        peer.apt:cleanup()
         print(k, "keepalive timeout.")
-        for port,t in pairs(bind_map) do
-          if t.peer == v then
-            print("cleanup port", port)
-            for apt,d in pairs(t.conn_map) do
-              apt:close()
-              t.conn_map[apt] = nil
-            end
+        for connkey,obj in pairs(peer.ppclient_connection_map) do
+          obj.apt:close()
+          obj.apt = nil
+
+          local t = bind_map[obj.bind_port]
+          if t then
             t.serv:close()
             t.serv = nil
-            bind_map[port] = nil
+            bind_map[obj.bind_port] = nil
           end
         end
+
         peer_map[k] = nil
 
-        for _,apt in pairs(serv.clientmap) do
-          if apt == v.apt then
+        for k,apt in pairs(serv.clientmap) do
+          if apt == peer.apt then
             serv.clientmap[k] = nil
             break
           end
@@ -261,7 +277,7 @@ local function keepalive_peers()
       end
     end
 
-    fan.sleep(10)
+    fan.sleep(5)
   end
 end
 
@@ -269,7 +285,7 @@ local function sync_port_buffers()
   while true do
     local count = 0
     for ckey,peer in pairs(peer_map) do
-      for connkey,obj in pairs(peer.conn_map) do
+      for connkey,obj in pairs(peer.ppservice_connection_map) do
         if not obj.forward_index and #(obj.input_queue) > 0 then
           local data = table.remove(obj.input_queue, 1)
           -- obj.input_queue = {}
@@ -290,24 +306,26 @@ local function sync_port_buffers()
       end
     end
 
-    for connkey,obj in pairs(connkey_conn_map) do
-      -- print(obj, obj.connected, obj.forward_index, #(obj.input_queue))
-      if obj.connected and not obj.forward_index and #(obj.input_queue) > 0 then
-        local data = table.remove(obj.input_queue, 1)
-        -- obj.input_queue = {}
-        local auto_index = obj.auto_index + 1
-        obj.auto_index = auto_index
-        obj.forward_index = send(obj.peer.apt, {
-            type = "ppdata_req",
-            connkey = connkey,
-            data = data,
-            index = auto_index
-          })
-        if config.debug then
-          print("forwarding to server", obj.forward_index, auto_index)
+    for k,peer in pairs(peer_map) do
+      for connkey,obj in pairs(peer.ppclient_connection_map) do
+        -- print(obj, obj.connected, obj.forward_index, #(obj.input_queue))
+        if obj.connected and not obj.forward_index and #(obj.input_queue) > 0 then
+          local data = table.remove(obj.input_queue, 1)
+          -- obj.input_queue = {}
+          local auto_index = obj.auto_index + 1
+          obj.auto_index = auto_index
+          obj.forward_index = send(peer.apt, {
+              type = "ppdata_req",
+              connkey = connkey,
+              data = data,
+              index = auto_index
+            })
+          if config.debug then
+            print("forwarding to server", obj.forward_index, auto_index)
+          end
+          peer.apt.index_conn_map[obj.forward_index] = obj
+          count = count + 1
         end
-        obj.peer.apt.index_conn_map[obj.forward_index] = obj
-        count = count + 1
       end
     end
 
@@ -336,6 +354,7 @@ end
 local function bind_apt(apt)
   apt.ppkeepalive_map = {}
   apt.index_conn_map = {}
+  apt.last_keepalive = 0
 
   apt.onread = function(body, host, port)
     local msg = objectbuf.decode(body, sym)
@@ -355,11 +374,16 @@ local function bind_apt(apt)
     local command = command_map[msg.type]
     if command then
       apt.last_keepalive = utils.gettime()
+      if msg.clientkey then
+        command_map.ppkeepalive(apt, host, port, msg)
+      end
       command(apt, host, port, msg)
     end
   end
 
   apt.onsent = function(index)
+    -- print("onsent", apt)
+    apt.last_keepalive = utils.gettime()
     local obj = apt.index_conn_map[index]
 
     if obj then
@@ -419,29 +443,32 @@ fan.loop(function()
           resp:reply_chunk(string.format("udp send: %d, receive: %d, resend: %d\n",
               config.udp_send_total, config.udp_receive_total, config.udp_resend_total))
           for key,apt in pairs(serv.clientmap) do
-            local incoming = apt._incoming_map[key]
-            if incoming then
+            if apt.last_keepalive > 0 then
               resp:reply_chunk(string.format("%s(%1.3f)\twaiting: %d, ack total: %d\n", key, utils.gettime() - apt.last_keepalive, apt._output_wait_count, apt.output_wait_ack_total))
               resp:reply_chunk("----------\n")
-              for output_index,incoming_object in pairs(incoming) do
-                if incoming_object.done then
-                  resp:reply_chunk(string.format("%06d\treceived %d\n", output_index, incoming_object.count))
-                else
-                  local count = 0
-                  for idx,body in pairs(incoming_object.items) do
-                    if body then
-                      count = count + 1
+              local incoming = apt._incoming_map[key]
+              if incoming then
+                for output_index,incoming_object in pairs(incoming) do
+                  if incoming_object.done then
+                    resp:reply_chunk(string.format("%06d\treceived %d\n", output_index, incoming_object.count))
+                  else
+                    local count = 0
+                    for idx,body in pairs(incoming_object.items) do
+                      if body then
+                        count = count + 1
+                      end
                     end
-                  end
 
-                  resp:reply_chunk(string.format("%06d\treceiving %d/%d\n", output_index, count, incoming_object.count))
+                    resp:reply_chunk(string.format("%06d\treceiving %d/%d\n", output_index, count, incoming_object.count))
+                  end
                 end
               end
 
+              collectgarbage()
               resp:reply_chunk("\n")
             end
           end
-
+          resp:reply_chunk(string.format("\nMem: %1.3f\n", collectgarbage("count")))
           return resp:reply_end()
         elseif params.action == "bind" then
           local port = tonumber(params.port)
@@ -467,7 +494,6 @@ fan.loop(function()
             remote_host = params.remote_host,
             remote_port = params.remote_port,
             clientkey = params.clientkey,
-            conn_map = {},
 
             serv = tcpd.bind{
               port = port,
@@ -475,19 +501,18 @@ fan.loop(function()
                 local d = {
                   input_queue = {},
                   apt = apt,
-                  t = t,
+                  bind_port = port,
                   peer = peer,
                   host = peer.host,
                   port = peer.port,
                   forward_index = nil,
                   auto_index = 0,
+                  connected = true,
                 }
 
                 connkey_index = connkey_index + 1
                 d.connkey = connkey_index
-
-                t.conn_map[apt] = d
-                connkey_conn_map[d.connkey] = d
+                peer.ppclient_connection_map[d.connkey] = d
 
                 send(peer.apt, {
                     type = "ppconnect",
@@ -504,7 +529,6 @@ fan.loop(function()
                   end,
                   ondisconnected = function(msg)
                     print("client disconnected", msg)
-                    t.conn_map[apt] = nil
                     d.connected = nil
                     send(peer.apt, {type = "ppdisconnectedclient", connkey = d.connkey})
                   end
