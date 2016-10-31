@@ -3,6 +3,7 @@ local config = require "config"
 local connector = require "fan.connector"
 local objectbuf = require "fan.objectbuf"
 local utils = require "fan.utils"
+local upnp = require "fan.upnp"
 
 local cjson = require "cjson"
 require "compat53"
@@ -70,7 +71,11 @@ local function send_any(apt, msg, ...)
 end
 
 function command_map.list(apt, host, port, msg)
-  internal_port = serv.serv:getPort()
+  if not internal_port then
+    internal_port = serv.serv:getPort()
+    local obj = upnp.new(1)
+    obj:AddPortMapping(internal_host, string.format("%d", internal_port), string.format("%d", internal_port), "udp")
+  end
   -- print(cjson.encode(msg))
 
   for i,v in ipairs(msg.data) do
@@ -92,7 +97,7 @@ function command_map.list(apt, host, port, msg)
   end
 
   for i,v in ipairs(msg.data) do
-    -- print("list", i, cjson.encode(v))
+    print("list", i, cjson.encode(v))
     local peer = peer_map[v.clientkey]
     if peer then
       local output_index = send(peer.apt, {type = "ppkeepalive"})
