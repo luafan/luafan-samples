@@ -10,13 +10,15 @@ local co = coroutine.create(function()
             if not input then
                 break
             end
-            print("serv read", input)
+            -- print("serv read", input)
 
             apt:send(input:GetBytes())
         end
     end
 end)
 coroutine.resume(co)
+
+local data = string.rep("a", 1492)
 
 fan.loop(function()
     cli = connector.connect("tcp://127.0.0.1:10000")
@@ -28,9 +30,9 @@ fan.loop(function()
             break
         end
 
-        print("client read", input)
-        print(input:GetBytes())
+        -- print("client read", input)
+        input:GetBytes()
 
-        cli:send(os.date())
+        cli:send(data)
      end
 end)

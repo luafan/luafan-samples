@@ -1,10 +1,9 @@
 local fan = require "fan"
 local utils = require "fan.utils"
 local connector = require "fan.connector"
-require "compat53"
 
 if fan.fork() > 0 then
-  local longstr = string.rep("abc", 333)
+  local longstr = string.rep("abc", 3333)
   print(#(longstr))
 
   fan.loop(function()
@@ -35,6 +34,7 @@ else
         print("onaccept")
         apt.onread = function(body)
           -- print("apt onread", #(body))
+          -- print(apt.host, apt.port, apt.dest)
           apt:send(body)
         end
       end
