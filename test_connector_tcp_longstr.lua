@@ -1,4 +1,5 @@
 local fan = require "fan"
+local stream = require "fan.stream"
 local connector = require "fan.connector"
 
 local data = string.rep([[coroutine.create]], 10000)

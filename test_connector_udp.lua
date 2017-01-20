@@ -1,3 +1,9 @@
+if jit then
+  local v = require "jit.v"
+  os.remove("connector_udp.log")
+  v.on("connector_udp.log")
+end
+
 local fan = require "fan"
 local utils = require "fan.utils"
 local connector = require "fan.connector"

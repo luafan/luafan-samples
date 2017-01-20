@@ -1,3 +1,12 @@
+require "compat53"
+if jit then
+  local v = require "jit.v"
+  os.remove("objectbuf.log")
+  v.on("objectbuf.log")
+end
+local config = require "config"
+config.stream_ffi = false
+
 local objectbuf = require "fan.objectbuf"
 local fan = require "fan"
 local cjson = require "cjson"
@@ -23,6 +32,10 @@ local a = {
         -1234556789,
         -12345.6789,
         0,
+        "asdfa",
+        d = {
+            e = f
+        }
         -- function()end
     },
     averyvery = "long long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long textlong long text",
