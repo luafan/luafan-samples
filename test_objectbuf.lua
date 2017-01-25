@@ -9,12 +9,8 @@ config.stream_ffi = false
 
 local objectbuf = require "fan.objectbuf"
 local fan = require "fan"
+local utils = require "fan.utils"
 local cjson = require "cjson"
-
-local function gettime()
-  local sec,usec = fan.gettime()
-  return sec + usec/1000000.0
-end
 
 ttt = "vvv"
 
@@ -52,23 +48,23 @@ local sym = objectbuf.symbol({ b = {a = ""}, averyvery = ""})
 
 local loopcount = 10000
 
-local start = gettime()
+local start = utils.gettime()
 for i=1,loopcount do
     objectbuf.decode(objectbuf.encode(a))
 end
-print(gettime() - start)
+print(utils.gettime() - start)
 
-local start = gettime()
+local start = utils.gettime()
 for i=1,loopcount do
     objectbuf.decode(objectbuf.encode(a, sym), sym)
 end
-print(gettime() - start)
+print(utils.gettime() - start)
 
-local start = gettime()
+local start = utils.gettime()
 for i=1,loopcount do
     cjson.decode(cjson.encode(a))
 end
-print(gettime() - start)
+print(utils.gettime() - start)
 
 
 os.exit()

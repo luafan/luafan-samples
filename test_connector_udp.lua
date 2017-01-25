@@ -5,11 +5,15 @@ if jit then
 end
 
 local fan = require "fan"
+local config = require "config"
+
 local utils = require "fan.utils"
 local connector = require "fan.connector"
 
+config.udp_check_timeout_duration = 10
+
 if fan.fork() > 0 then
-  local longstr = string.rep("abc", 3333)
+  local longstr = string.rep("abc", 333333)
   print(#(longstr))
 
   fan.loop(function()
@@ -26,12 +30,12 @@ if fan.fork() > 0 then
       cli:send(longstr)
       -- print(utils.gettime() - start)
 
-      while true do
-        collectgarbage()
-        print(collectgarbage("count"))
+      -- while true do
+      --   collectgarbage()
+      --   print(collectgarbage("count"))
 
-        fan.sleep(2)
-      end
+      --   fan.sleep(2)
+      -- end
     end)
 else
   local co = coroutine.create(function()
@@ -48,12 +52,12 @@ else
   assert(coroutine.resume(co))
 
   fan.loop(function()
-      while true do
-        collectgarbage()
-        print(collectgarbage("count"))
+      -- while true do
+      --   collectgarbage()
+      --   print(collectgarbage("count"))
 
-        fan.sleep(2)
-      end
+      --   fan.sleep(2)
+      -- end
     end)
 
 end

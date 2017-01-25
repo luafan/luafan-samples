@@ -1,4 +1,5 @@
 local fan = require "fan"
+local utils = require "fan.utils"
 local worker = require "fan.worker"
 local md5 = require "md5"
 
@@ -13,17 +14,12 @@ local commander = worker.new({
     end
   }, tonumber(arg[1] or 3), tonumber(arg[2] or 1)) --  "tcp://127.0.0.1:10000"
 
-local function gettime()
-  local sec,usec = fan.gettime()
-  return sec + usec/1000000.0
-end
-
 fan.loop(function()
     commander.wait_all_slaves()
 
     local count = 0
     local last_count = 0
-    local last_time = gettime()
+    local last_time = utils.gettime()
 
 
     for i=1,20 do
@@ -46,8 +42,8 @@ fan.loop(function()
 
     while true do
       fan.sleep(2)
-      print(string.format("count=%d speed=%1.03f", count, (count - last_count) / (gettime() - last_time)))
-      last_time = gettime()
+      print(string.format("count=%d speed=%1.03f", count, (count - last_count) / (utils.gettime() - last_time)))
+      last_time = utils.gettime()
       last_count = count
       for i,v in ipairs(commander.slaves) do
         print(i, v.task_index, v.status, v.jobcount)
