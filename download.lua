@@ -21,6 +21,10 @@ local function gettime()
 end
 
 local function random_url(task)
+    if task.hardurl then
+        return task.hardurl
+    end
+    
     if task.peerurls then
         return task.peerurls[math.random(#(task.peerurls))]
     else
@@ -73,7 +77,7 @@ local function start_task(task, beginoffset, endoffset, offset)
                     end
                 end
             elseif header.responseCode == 302 then
-                task.url = header.Location
+                task.hardurl = header.Location
             elseif header.responseCode == 200 then
                 task.offset = 0
             else

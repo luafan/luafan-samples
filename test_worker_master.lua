@@ -12,11 +12,9 @@ local commander = worker.new({
       -- return y, d:digest()
       return y, x
     end
-  }, tonumber(arg[1] or 3), tonumber(arg[2] or 1)) --  "tcp://127.0.0.1:10000"
+  }, 0, tonumber(arg[2] or 10), "tcp://127.0.0.1:10000")
 
 fan.loop(function()
-    commander.wait_all_slaves()
-
     local count = 0
     local last_count = 0
     local last_time = utils.gettime()
@@ -26,10 +24,19 @@ fan.loop(function()
       local co = coroutine.create(function()
           local data = string.rep("a", 102400)
           while true do
-            local status, x, y = commander:test(1000, data)
-            assert(x == data)
-            -- assert(y == "7202826a7791073fe2787f0c94603278")
-            count = count + 1
+            local st,msg = pcall(function()
+              local status, x, y = commander:test(1000, data)
+              if status then
+                assert(x == data)
+                -- assert(y == "7202826a7791073fe2787f0c94603278")
+                count = count + 1
+              else
+                print(x)
+              end
+            end)
+            if not st then
+              print(msg)
+            end
           end
         end)
       local st,msg = coroutine.resume(co)

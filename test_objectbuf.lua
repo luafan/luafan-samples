@@ -12,6 +12,9 @@ local fan = require "fan"
 local utils = require "fan.utils"
 local cjson = require "cjson"
 
+print(objectbuf.decode(objectbuf.encode(math.pow(2, 32))))
+print(objectbuf.decode(objectbuf.encode(false)))
+
 ttt = "vvv"
 
 local a = {
@@ -39,7 +42,7 @@ local a = {
 
 -- a.b.a = a
 
-for i=1,10 do
+for i=1,100 do
     table.insert(a.b, "123456789012345678901234567890")
 end
 
