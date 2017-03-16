@@ -1,9 +1,3 @@
-if jit then
-  local v = require "jit.v"
-  os.remove("connector_udp.log")
-  v.on("connector_udp.log")
-end
-
 local fan = require "fan"
 local config = require "config"
 
@@ -13,29 +7,36 @@ local connector = require "fan.connector"
 config.udp_check_timeout_duration = 10
 
 if fan.fork() > 0 then
-  local longstr = string.rep("abc", 333333)
+  local longstr = string.rep("abc", 3)
   print(#(longstr))
 
   fan.loop(function()
       fan.sleep(1)
       cli = connector.connect("udp://127.0.0.1:10000")
+
+      local count = 0
+      local last_count = 0
+      local last_time = utils.gettime()
+
+      coroutine.wrap(function()
+          while true do
+            fan.sleep(2)
+            print(string.format("count=%d speed=%1.03f", count, (count - last_count) / (utils.gettime() - last_time)))
+            last_time = utils.gettime()
+            last_count = count
+          end
+      end)()
+
       cli.onread = function(body)
+        count = count + 1
         -- print("cli onread", #(body))
         assert(body == longstr)
         -- local start = utils.gettime()
         cli:send(longstr)
         -- print(utils.gettime() - start)
       end
-      -- local start = utils.gettime()
+
       cli:send(longstr)
-      -- print(utils.gettime() - start)
-
-      -- while true do
-      --   collectgarbage()
-      --   print(collectgarbage("count"))
-
-      --   fan.sleep(2)
-      -- end
     end)
 else
   local co = coroutine.create(function()
@@ -44,20 +45,12 @@ else
         print("onaccept")
         apt.onread = function(body)
           -- print("apt onread", #(body))
-          -- print(apt.host, apt.port, apt.dest)
           apt:send(body)
         end
       end
     end)
   assert(coroutine.resume(co))
 
-  fan.loop(function()
-      -- while true do
-      --   collectgarbage()
-      --   print(collectgarbage("count"))
-
-      --   fan.sleep(2)
-      -- end
-    end)
+  fan.loop()
 
 end
