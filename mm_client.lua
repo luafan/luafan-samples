@@ -462,8 +462,8 @@ local function verify_task_md5(r)
   if r.completed == 1 then
     if r.verified == 0 then
       print(r.path, "verifying md5 ...")
-      local current_md5 = commander:getfilemd5(getfilepath(r.path))
-      if current_md5 then
+      local status, current_md5 = commander:getfilemd5(getfilepath(r.path))
+      if status and current_md5 then
         if current_md5 == r.md5 or current_md5 == r.lastfailedmd5 then
           print(r.path, "md5 verified.", current_md5 == r.md5, current_md5 == r.lastfailedmd5)
           r.verified = 1
