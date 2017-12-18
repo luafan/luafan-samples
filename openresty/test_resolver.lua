@@ -9,7 +9,7 @@ ngx = require "ngx"
 local function main_resolver()
     local resolver = require "resty.dns.resolver"
     local r, err = resolver:new{
-        nameservers = {"114.114.114.114", {"8.8.4.4", 53} },
+        nameservers = {"114.114.114.114" }, -- , {"8.8.8.8", 53}
         retrans = 5,  -- 5 retransmissions on receive timeout
         timeout = 2000,  -- 2 sec
     }
@@ -39,7 +39,4 @@ local function main_resolver()
     os.exit()
 end
 
-main_co = coroutine.create(main_resolver)
-print("main", coroutine.resume(main_co))
-
-fan.loop()
+fan.loop(main_resolver)

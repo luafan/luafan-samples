@@ -1,0 +1,1 @@
+tcp_pause_read_write_on_callback = false

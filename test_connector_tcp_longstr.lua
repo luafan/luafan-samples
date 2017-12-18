@@ -1,8 +1,9 @@
 local fan = require "fan"
 local stream = require "fan.stream"
 local connector = require "fan.connector"
+local utils = require "fan.utils"
 
-local data = string.rep([[coroutine.create]], 10000)
+local data = string.rep([[coroutine.create]], 1000)
 
 local co = coroutine.create(function()
     serv = connector.bind("tcp://127.0.0.1:10000")
@@ -40,6 +41,19 @@ fan.loop(function()
     d:AddString(data)
     cli:send(d:package())
 
+    local count = 0
+    local last_count = 0
+    local last_time = utils.gettime()
+
+    coroutine.wrap(function()
+        while true do
+          fan.sleep(2)
+          print(string.format("count=%d speed=%1.03f", count, (count - last_count) / (utils.gettime() - last_time)))
+          last_time = utils.gettime()
+          last_count = count
+        end
+    end)()
+
     local last_expect = 1
 
     while true do
@@ -51,6 +65,7 @@ fan.loop(function()
 
       local str,expect = input:GetString()
       if str then
+        count = count + 1
         last_expect = 1
 
         assert(str == data)
