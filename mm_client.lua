@@ -1,4 +1,6 @@
 local rootPath = "sync"
+local config = require "config"
+config.http_using_core = true
 
 local remotePath = "/file"
 local remote_url = "https://mm.youchat.me"
@@ -38,7 +40,7 @@ local commander = worker.new({
     ["pathwrite"] = function(path, offset, buf)
       local f = file_map[path]
       if not f then
-        f = io.open(path, "rb+")
+        f = io.open(path, "r+b")
         if not f then
           f = io.open(path, "wb")
         end
@@ -171,7 +173,6 @@ local function getfilepath(urlpath)
 end
 
 local function is_invalidate_links(links)
-  -- http://bcscdn.baidu.com/issue/netdisk/wenxintishi/%e6%b8%a9%e9%a6%a8%e6%8f%90%e7%a4%ba.avi?response-content-disposition=attachment;%20filename=%e6%b8%a9%e9%a6%a8%e6%8f%90%e7%a4%ba.avi
   return not links or #(links) == 0 or (#(links) == 1 and string.find(links[1], "/issue/netdisk/wenxintishi/", 1, true))
 end
 
@@ -275,7 +276,8 @@ local function start_task(task, block)
     ssl_verifyhost = 0,
     ssl_verifypeer = 0,
     headers = {
-      ["Range"] = block.endoffset and string.format("bytes=%1.0f-%1.0f", block.offset, block.endoffset) or string.format("bytes=%1.0f-", block.offset)
+      ["Range"] = block.endoffset and string.format("bytes=%1.0f-%1.0f", block.offset, block.endoffset) or string.format("bytes=%1.0f-", block.offset),
+      ["User-Agent"] = "netdisk;5.6.3.4;PC;PC-Windows;5.1.2600;WindowsBaiduYunGuanJia",
     },
     timeout = 30,
     onreceive = function(data)

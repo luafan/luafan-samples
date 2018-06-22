@@ -252,7 +252,7 @@ local function add(url, path, peerurls)
     end
 
     local task = {url = url, peerurls = peerurls, path = path, subtasks = {}, current_downloaded = 0, speed = 0, last_mark_time = gettime(), last_mark_value = 0, stop = true, completed = false, nameindex = 1}
-    local f = io.open(path, "rb+")
+    local f = io.open(path, "r+b")
     if not f then
         f = io.open(path, "wb")
     end

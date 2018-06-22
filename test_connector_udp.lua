@@ -61,18 +61,19 @@ if fan.fork() > 0 then
             print(string.format("count=%d speed=%1.03f",
               count, (count - last_count) / (utils.gettime() - last_time)),
               config.udp_send_total, config.udp_receive_total, config.udp_resend_total,
-              count_table_size(cli._output_wait_package_parts_map),
+              count_table_size(cli._output_package_parts_map),
               count_table_size(cli._output_wait_ack),
               count_chain_size(cli._output_chain),
               cli._send_window, cli._recv_window,
-              count_table_size(cli._send_window_holes), count_table_size(cli._recv_window_holes)
+              count_table_size(cli._send_window_holes), count_table_size(cli._recv_window_holes),
+              cli._output_index
             )
             last_time = utils.gettime()
             last_count = count
           end
       end)()
 
-      cli.onread = function(body)
+      cli.onread = function(apt, body)
         -- print("cli.onread", #body)
         count = count + 1
         -- print("cli onread", #(body))
@@ -91,7 +92,7 @@ else
       serv = connector.bind("udp://localhost:10000")
       serv.onaccept = function(apt)
         print("onaccept")
-        apt.onread = function(body)
+        apt.onread = function(apt, body)
           -- print("apt onread", #(body))
           apt:send(body)
         end
